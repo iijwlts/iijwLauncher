@@ -1,0 +1,19 @@
+[project]
+name = "iijwlauncher"
+version = "0.1.0"
+description = "iijwLauncher"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fuzzywuzzy>=0.18.0",
+    "markdown>=3.9",
+    "pyqtdarktheme>=2.1.0",
+    "pyside6>=6.9.2",
+    "python-levenshtein>=0.27.1",
+    "requests>=2.32.5",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.16.0",
+]
