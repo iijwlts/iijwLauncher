@@ -239,9 +239,8 @@ class programLauncher(QMainWindow):
         url = "https://raw.githubusercontent.com/iijwlts/iijwLauncherData/refs/heads/main/data.json"
         response = requests.get(url)
         response.raise_for_status()
-        data = response.json()  # Agora já vem como lista de programas
+        data = response.json() 
 
-        # Garante que é lista (mesmo se no futuro vier só 1 objeto)
         if isinstance(data, dict):
             self.program_data = [data]
         else:
@@ -249,13 +248,11 @@ class programLauncher(QMainWindow):
 
         self.original_program_data = self.program_data.copy()
 
-        # Monta opções de busca
         self.search_choices = []
         for program in self.original_program_data:
             combined_text = f"{program['program']} {program['version']} {program['README']}"
             self.search_choices.append((combined_text, program))
 
-        # Atualiza lista na UI
         self.program_list.clear()
         for program in self.program_data:
             self.program_list.addItem(program["program"])
