@@ -3,8 +3,8 @@ import os
 import logging
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QListWidget, QTextEdit, QPushButton, QLabel, QDialog, 
-                               QSplitter, QStyle, QSizeGrip, QLineEdit)
-from PySide6.QtCore import Qt, QPoint, QTimer
+                               QSplitter, QStyle, QSizeGrip, QLineEdit, QProgressBar)
+from PySide6.QtCore import Qt, QPoint, QTimer, QThread, Signal
 from PySide6.QtGui import QFont, QFontDatabase, QTextDocument, QTextCursor, QIcon
 import markdown
 import requests
@@ -92,6 +92,40 @@ class LogDialog(QDialog):
         except FileNotFoundError:
             self.log_text.setText("No logs found.")
 
+class Downloader(QThread):
+    setTotalProgress = Signal(int)
+    setCurrentProgress = Signal(int)
+    succeeded = Signal()
+    failed = Signal(str)
+    
+    def __init__(self, url, filename):
+        super().__init__()
+        self._url = url
+        self._filename = filename
+    
+    def run(self):
+        try:
+            response = requests.get(self._url, stream=True)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            self.setTotalProgress.emit(total_size)
+            
+            downloaded_size = 0
+            chunk_size = 8192
+            
+            with open(self._filename, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded_size += len(chunk)
+                        self.setCurrentProgress.emit(downloaded_size)
+            
+            self.succeeded.emit()
+            
+        except Exception as e:
+            self.failed.emit(str(e))
+
 class programLauncher(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -110,6 +144,7 @@ class programLauncher(QMainWindow):
         
         self.log("Application started")
         self.old_pos = self.pos()
+        self.downloader = None
 
     def load_custom_font(self):
         font_path = resource_path(r".\resources\fonts\Inter-Regular.ttf")
@@ -169,7 +204,18 @@ class programLauncher(QMainWindow):
         self.launch_button.clicked.connect(self.launch_program)
         buttons_layout.addWidget(self.launch_button)
         
-        buttons_layout.addStretch()
+        self.progress_container = QWidget()
+        progress_layout = QHBoxLayout(self.progress_container)
+        progress_layout.setContentsMargins(10, 0, 0, 0)
+        
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        progress_layout.addWidget(self.progress_bar)
+        
+        buttons_layout.addWidget(self.progress_container)
+        buttons_layout.setStretch(1, 1)
         
         self.logs_button = QPushButton()
         self.logs_button.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
@@ -316,20 +362,52 @@ class programLauncher(QMainWindow):
         binary_path = fr".\bin\{program_name.replace(' ', '_')}.exe"
         
         if not os.path.exists(binary_path):
-            self.log(f"Downloading binary from {binary_url}")
-            try:
-                os.makedirs(os.path.dirname(binary_path), exist_ok=True)
-                
-                response = requests.get(binary_url, stream=True)
-                response.raise_for_status()
-                with open(binary_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                self.log(f"Binary downloaded successfully: {binary_path}")
-            except Exception as e:
-                self.log(f"Error downloading binary: {e}")
-                return
+            self.log(f"Starting download of {program_name}")
+            
+            bin_dir = os.path.dirname(binary_path)
+            if not os.path.exists(bin_dir):
+                os.makedirs(bin_dir)
+                self.log(f"Created directory: {bin_dir}")
+            
+            self.progress_container.setVisible(True)
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(0)
+            self.launch_button.setEnabled(False)
+            self.launch_button.setText("Downloading...")
+            
+            self.downloader = Downloader(binary_url, binary_path)
+            
+            self.downloader.setTotalProgress.connect(self.progress_bar.setMaximum)
+            self.downloader.setCurrentProgress.connect(self.progress_bar.setValue)
+            self.downloader.succeeded.connect(self.download_succeeded)
+            self.downloader.failed.connect(self.download_failed)
+            self.downloader.finished.connect(self.download_finished)
+            
+            self.downloader.start()
+        else:
+            self.launch_existing_program(binary_path)
+    
+    def download_succeeded(self):
+        self.log("Binary downloaded successfully")
+        current_row = self.program_list.currentRow()
+        if 0 <= current_row < len(self.program_data):
+            program_data = self.program_data[current_row]
+            binary_path = fr".\bin\{program_data['program'].replace(' ', '_')}.exe"
+            self.launch_existing_program(binary_path)
+    
+    def download_failed(self, error_message):
+        self.log(f"Download failed: {error_message}")
+        self.launch_button.setText("Launch Failed")
+    
+    def download_finished(self):
+        self.launch_button.setEnabled(True)
+        self.launch_button.setText("Launch")
         
+        if self.downloader:
+            self.downloader.deleteLater()
+            self.downloader = None
+    
+    def launch_existing_program(self, binary_path):
         self.log(f"Starting: {binary_path}")
         try:
             subprocess.Popen([binary_path], shell=True)
@@ -421,6 +499,7 @@ def get_stylesheet():
         font-weight: bold;
         background-color: rgba(80, 120, 220, 0.7);
         padding: 0 25px;
+        min-width: 100px;
     }
     #launchButton:hover {
         background-color: rgba(90, 140, 240, 0.8);
@@ -429,6 +508,19 @@ def get_stylesheet():
         min-width: 40px;
         max-width: 40px;
         padding: 0;
+    }
+    
+    QProgressBar {
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        text-align: center;
+        height: 24px;
+    }
+    
+    QProgressBar::chunk {
+        background-color: rgba(80, 120, 220, 0.8);
+        border-radius: 3px;
     }
     
     #footerWidget {
